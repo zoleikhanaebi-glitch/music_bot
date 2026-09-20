@@ -51,7 +51,7 @@ def start(message):
     bot.send_message(
         user_id,
         f"سلام! 🎵\nبه ربات دانلود موزیک خوش آمدید.\n\n"
-        f"نام آهنگ یا لینک یوتیوب مورد نظرتان را بفرستید تا فایل صوتی آن را دریافت کنید.\n\n"
+        f"لینک آهنگ از هر سایتی (ساندکلاد، یوتیوب، رادیوجوان و...) یا فقط نام آهنگ را بفرستید.\n\n"
         f"📢 عضویت در کانال ما: @{CHANNEL_USERNAME}"
     )
 
@@ -120,9 +120,11 @@ def handle_all_messages(message):
         return
 
     query = message.text.strip()
-    status_msg = bot.send_message(chat_id, "🔍 در حال جستجو و دریافت آهنگ... لطفاً کمی شکیبا باشید.")
+    status_msg = bot.send_message(chat_id, "🔍 در حال جستجو و دانلود از سرور جهانی... لطفاً کمی شکیبا باشید.")
 
-    # 🛡️ کانفیگ ضدسد جدید با کلاینت اندروید VR و وب کریئیتور
+    # 🌐 تنظیم هوشمند برای پشتیبانی از تمام سایت‌های جهان + جستجو
+    search_target = query if query.startswith(('http://', 'https://')) else f"ytsearch1:{query}"
+
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
@@ -132,7 +134,6 @@ def handle_all_messages(message):
         }],
         'outtmpl': 'downloads/%(id)s.%(ext)s',
         'quiet': True,
-        'default_search': 'ytsearch1:',
         'max_filesize': 50 * 1024 * 1024,
         'user_agent': 'Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0',
         'extractor_args': {
@@ -144,20 +145,20 @@ def handle_all_messages(message):
         'nocheckcertificate': True,
     }
 
-    # اگر فایل cookies.txt در ریپازیتوری وجود داشت، آن را هم خوانده و اعمال می‌کند
+    # اگر فایل کوکی قرار دادید، آن را روی تمام سایت‌ها اعمال می‌کند
     if os.path.exists('cookies.txt'):
         ydl_opts['cookiefile'] = 'cookies.txt'
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=True)
+            info = ydl.extract_info(search_target, download=True)
             if 'entries' in info and info['entries']:
                 info = info['entries'][0]
 
-            file_id = info['id']
+            file_id = info.get('id', 'audio')
             file_path = f"downloads/{file_id}.mp3"
-            title = info.get('title', 'Audio')
-            uploader = info.get('uploader', 'Music Bot')
+            title = info.get('title', 'Music')
+            uploader = info.get('uploader', 'Global Music')
 
             if os.path.exists(file_path):
                 bot.edit_message_text("⬆️ در حال ارسال به تلگرام...", chat_id, status_msg.message_id)
@@ -173,10 +174,10 @@ def handle_all_messages(message):
                 os.remove(file_path)
                 bot.delete_message(chat_id, status_msg.message_id)
             else:
-                bot.edit_message_text("❌ متأسفانه فایل دریافت نشد.", chat_id, status_msg.message_id)
+                bot.edit_message_text("❌ متأسفانه فایل صوتی پیدا یا دریافت نشد.", chat_id, status_msg.message_id)
 
     except Exception as e:
-        bot.edit_message_text(f"❌ خطایی رخ داد:\n`{str(e)[:100]}`", chat_id, status_msg.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"❌ خطایی در دریافت رخ داد:\n`{str(e)[:100]}`", chat_id, status_msg.message_id, parse_mode="Markdown")
 
 if not os.path.exists('downloads'):
     os.makedirs('downloads')
