@@ -7,7 +7,7 @@
 ![Python](https://img.shields.io/badge/Python-3.9+-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E?style=for-the-badge&logo=railway&logoColor=white)
 ![Telegram](https://img.shields.io/badge/Telegram-Bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)
-
+[![Channel](https://img.shields.io/badge/Join-Our_Channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/meov2ray/)
 </div>
 
 ---
