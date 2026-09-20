@@ -1,2 +1,5 @@
 [phases.setup]
 nixPkgs = ['python3', 'ffmpeg']
+
+[variables]
+PATH = "/nix/store:$PATH"
