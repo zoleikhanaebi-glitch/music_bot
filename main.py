@@ -122,7 +122,7 @@ def handle_all_messages(message):
     query = message.text.strip()
     status_msg = bot.send_message(chat_id, "🔍 در حال جستجو و دریافت آهنگ... لطفاً کمی شکیبا باشید.")
 
-    # 🛡️ کانفیگ استاندارد و ضد سد یوتیوب (حل مشکل Sign in to confirm you're not a bot)
+    # 🛡️ کانفیگ ضدسد جدید با کلاینت اندروید VR و وب کریئیتور
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
@@ -134,15 +134,19 @@ def handle_all_messages(message):
         'quiet': True,
         'default_search': 'ytsearch1:',
         'max_filesize': 50 * 1024 * 1024,
-        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+        'user_agent': 'Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0',
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'mweb', 'tv_embedded'],
+                'player_client': ['android_vr', 'web_creator', 'ios'],
                 'skip': ['hls', 'dash']
             }
         },
         'nocheckcertificate': True,
     }
+
+    # اگر فایل cookies.txt در ریپازیتوری وجود داشت، آن را هم خوانده و اعمال می‌کند
+    if os.path.exists('cookies.txt'):
+        ydl_opts['cookiefile'] = 'cookies.txt'
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
