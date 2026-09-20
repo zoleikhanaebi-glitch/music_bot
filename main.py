@@ -51,7 +51,7 @@ def start(message):
     bot.send_message(
         user_id,
         f"سلام! 🎵\nبه ربات دانلود موزیک خوش آمدید.\n\n"
-        f"نام آهنگ یا لینک یوتیوب مورد نظرتان را بفرستید تا فایل صوتی آن را دریافت کنید.\n\n"
+        f"نام آهنگ یا لینک مورد نظرتان را بفرستید تا فایل صوتی آن را دریافت کنید.\n\n"
         f"📢 عضویت در کانال ما: @{CHANNEL_USERNAME}"
     )
 
@@ -122,7 +122,7 @@ def handle_all_messages(message):
     query = message.text.strip()
     status_msg = bot.send_message(chat_id, "🔍 در حال جستجو و دریافت آهنگ... لطفاً کمی شکیبا باشید.")
 
-    # تنظیمات استاندارد yt-dlp (بدون تعیین مسیر دستی برای ffmpeg)
+    # 🛡️ تنظیمات کامل ydl_opts همراه با پارامترهای دور زدن خطای 403 Forbidden
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
@@ -134,6 +134,13 @@ def handle_all_messages(message):
         'quiet': True,
         'default_search': 'ytsearch1:',
         'max_filesize': 50 * 1024 * 1024,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+            }
+        },
+        'nocheckcertificate': True,
     }
 
     try:
