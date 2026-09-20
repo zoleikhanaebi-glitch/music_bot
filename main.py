@@ -15,13 +15,19 @@ USERS_FILE = "users.json"
 
 def load_users():
     if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "r") as f:
-            return set(json.load(f))
+        try:
+            with open(USERS_FILE, "r") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
     return set()
 
 def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump(list(users), f)
+    try:
+        with open(USERS_FILE, "w") as f:
+            json.dump(list(users), f)
+    except Exception:
+        pass
 
 users_list = load_users()
 broadcast_state = {}
@@ -45,7 +51,7 @@ def start(message):
     bot.send_message(
         user_id,
         f"سلام! 🎵\nبه ربات دانلود موزیک خوش آمدید.\n\n"
-        f"نام آهنگ یا لینک مورد نظرتان را بفرستید.\n"
+        f"نام آهنگ یا لینک یوتیوب مورد نظرتان را بفرستید تا فایل صوتی آن را دریافت کنید.\n\n"
         f"📢 عضویت در کانال ما: @{CHANNEL_USERNAME}"
     )
 
@@ -86,7 +92,7 @@ def handle_all_messages(message):
     chat_id = message.chat.id
     user_id_str = str(chat_id)
 
-    # برودکست پیام توسط آدمین
+    # ارسال همگانی توسط مدیریت
     if ADMIN_ID and user_id_str == str(ADMIN_ID) and broadcast_state.get(chat_id):
         broadcast_state[chat_id] = False
         status_msg = bot.send_message(chat_id, "⏳ در حال ارسال پیام به تمام کاربران...")
@@ -105,7 +111,7 @@ def handle_all_messages(message):
         )
         return
 
-    # ثبت کاربر
+    # ثبت آیدی کاربر
     if chat_id not in users_list:
         users_list.add(chat_id)
         save_users(users_list)
@@ -116,9 +122,9 @@ def handle_all_messages(message):
     query = message.text.strip()
     status_msg = bot.send_message(chat_id, "🔍 در حال جستجو و دریافت آهنگ... لطفاً کمی شکیبا باشید.")
 
+    # تنظیمات استاندارد yt-dlp (بدون تعیین مسیر دستی برای ffmpeg)
     ydl_opts = {
         'format': 'bestaudio/best',
-        'ffmpeg_location': '/nix/var/nix/profiles/default/bin',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
