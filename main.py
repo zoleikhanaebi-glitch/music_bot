@@ -1,47 +1,79 @@
 import os
 import json
 import re
-import difflib
+import urllib.request
+import tempfile
+import threading
+
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from yt_dlp import YoutubeDL
 
-# =========================
-# SETTINGS
-# =========================
+from radiojavanapi import Client
+
+
+# =========================================================
+# CONFIG
+# =========================================================
 
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
+
 CHANNEL_USERNAME = "meov2ray"
 
+if not TOKEN:
+    raise RuntimeError("BOT_TOKEN is not set")
+
 bot = telebot.TeleBot(TOKEN)
+
+# Radio Javan client
+rj = Client()
 
 USERS_FILE = "users.json"
 
 users_list = set()
+
+# وضعیت پیام همگانی
 broadcast_state = {}
+
+# نتایج سرچ هر کاربر
+# user_id -> list of song objects
 search_results = {}
 
 
-# =========================
+# =========================================================
 # USERS
-# =========================
+# =========================================================
 
 def load_users():
-    if os.path.exists(USERS_FILE):
-        try:
-            with open(USERS_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f))
-        except:
-            pass
-    return set()
+    if not os.path.exists(USERS_FILE):
+        return set()
+
+    try:
+        with open(
+            USERS_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+            return set(json.load(f))
+
+    except Exception:
+        return set()
 
 
 def save_users():
     try:
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(list(users_list), f)
-    except:
+        with open(
+            USERS_FILE,
+            "w",
+            encoding="utf-8"
+        ) as f:
+            json.dump(
+                list(users_list),
+                f,
+                ensure_ascii=False
+            )
+
+    except Exception:
         pass
 
 
@@ -49,21 +81,24 @@ users_list = load_users()
 
 
 def add_user(user_id):
+
     if user_id not in users_list:
+
         users_list.add(user_id)
+
         save_users()
 
 
-# =========================
-# TEXT NORMALIZER
-# =========================
+# =========================================================
+# TEXT HELPERS
+# =========================================================
 
 def normalize(text):
 
     if not text:
         return ""
 
-    text = text.lower()
+    text = str(text).lower()
 
     replacements = {
         "ي": "ی",
@@ -79,15 +114,73 @@ def normalize(text):
     for old, new in replacements.items():
         text = text.replace(old, new)
 
-    text = re.sub(r"[^\w\sآ-ی]", " ", text)
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(
+        r"[^\w\sآ-ی]",
+        " ",
+        text
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
 
     return text.strip()
 
 
-# =========================
-# RESULT SCORE
-# =========================
+# =========================================================
+# SEARCH RESULT HELPERS
+# =========================================================
+
+def get_value(obj, name, default=""):
+
+    try:
+        value = getattr(
+            obj,
+            name,
+            default
+        )
+
+        if value is None:
+            return default
+
+        return value
+
+    except Exception:
+        return default
+
+
+def song_title(song):
+
+    return get_value(
+        song,
+        "name",
+        "آهنگ"
+    )
+
+
+def song_artist(song):
+
+    return get_value(
+        song,
+        "artist",
+        "خواننده"
+    )
+
+
+def song_id(song):
+
+    return get_value(
+        song,
+        "id",
+        None
+    )
+
+
+# =========================================================
+# SONG SCORE
+# =========================================================
 
 BAD_WORDS = [
     "remix",
@@ -97,105 +190,105 @@ BAD_WORDS = [
     "live",
     "لایو",
     "slowed",
-    "slow",
-    "sped up",
-    "speed up",
+    "sped",
     "nightcore",
     "karaoke",
-    "instrumental",
+    "instrumental"
 ]
 
 
-def score_result(query, entry):
-
-    title = entry.get("title", "")
-    uploader = entry.get("uploader", "")
+def score_song(query, song):
 
     q = normalize(query)
-    t = normalize(title)
-    u = normalize(uploader)
 
-    if not t:
-        return -1000
+    title = normalize(
+        song_title(song)
+    )
+
+    artist = normalize(
+        song_artist(song)
+    )
 
     score = 0
 
-    # شباهت کلی
-    similarity = difflib.SequenceMatcher(
-        None,
-        q,
-        t
-    ).ratio()
+    if not title:
+        return -1000
 
-    score += similarity * 50
+    # عبارت کامل
+    if q in title:
+        score += 100
 
-    # کلمات مشترک
+    if q in artist:
+        score += 50
+
+    # کلمات
     q_words = set(q.split())
-    t_words = set(t.split())
 
-    if q_words:
+    title_words = set(
+        title.split()
+    )
 
-        matched = len(q_words & t_words)
+    artist_words = set(
+        artist.split()
+    )
 
-        score += (
-            matched /
-            len(q_words)
-        ) * 80
-
-    # تطابق کامل
-    if q in t:
-        score += 60
-
-    # تطبیق با نام آپلودر
     for word in q_words:
 
-        if len(word) >= 3 and word in u:
-            score += 20
+        if word in title_words:
+            score += 30
 
-    # جریمه نسخه‌های غیر اصلی
-    for word in BAD_WORDS:
+        if word in artist_words:
+            score += 25
 
-        if word in t:
+    # نسخه‌های غیر اصلی
+    for bad in BAD_WORDS:
+
+        if bad in title:
             score -= 40
 
     return score
 
 
-def choose_best(query, entries):
+# =========================================================
+# KEYBOARDS
+# =========================================================
 
-    best = None
-    best_score = -99999
+def main_keyboard():
 
-    for entry in entries:
+    markup = InlineKeyboardMarkup(
+        row_width=1
+    )
 
-        if not entry:
-            continue
-
-        score = score_result(
-            query,
-            entry
+    markup.add(
+        InlineKeyboardButton(
+            "🎵 راهنمای استفاده",
+            callback_data="help"
         )
+    )
 
-        if score > best_score:
-            best_score = score
-            best = entry
+    markup.add(
+        InlineKeyboardButton(
+            "📢 کانال ما",
+            url=f"https://t.me/{CHANNEL_USERNAME}"
+        )
+    )
 
-    return best
+    return markup
 
-
-# =========================
-# ADMIN KEYBOARD
-# =========================
 
 def admin_keyboard():
 
-    markup = InlineKeyboardMarkup(row_width=2)
+    markup = InlineKeyboardMarkup(
+        row_width=2
+    )
 
     markup.add(
+
         InlineKeyboardButton(
             "📊 آمار",
             callback_data="admin_stats"
         ),
+
         InlineKeyboardButton(
             "📢 پیام همگانی",
             callback_data="admin_broadcast"
@@ -219,7 +312,7 @@ def back_keyboard():
     return markup
 
 
-def cancel_keyboard():
+def cancel_broadcast_keyboard():
 
     markup = InlineKeyboardMarkup()
 
@@ -233,32 +326,30 @@ def cancel_keyboard():
     return markup
 
 
-# =========================
-# SEARCH RESULTS KEYBOARD
-# =========================
+# =========================================================
+# SEARCH KEYBOARD
+# =========================================================
 
-def results_keyboard(user_id, entries):
+def results_keyboard(
+    user_id,
+    songs
+):
 
-    markup = InlineKeyboardMarkup(row_width=1)
+    markup = InlineKeyboardMarkup(
+        row_width=1
+    )
 
-    for index, entry in enumerate(entries[:8]):
+    for index, song in enumerate(songs):
 
-        title = entry.get(
-            "title",
-            "آهنگ"
+        title = song_title(song)
+        artist = song_artist(song)
+
+        text = f"🎵 {artist} - {title}"
+
+        # Telegram callback محدودیت طول دارد
+        callback = (
+            f"song:{user_id}:{index}"
         )
-
-        uploader = entry.get(
-            "uploader",
-            ""
-        )
-
-        text = f"🎵 {title}"
-
-        if uploader:
-            text += f" — {uploader}"
-
-        callback = f"song:{user_id}:{index}"
 
         markup.add(
             InlineKeyboardButton(
@@ -277,86 +368,82 @@ def results_keyboard(user_id, entries):
     return markup
 
 
-# =========================
+# =========================================================
 # START
-# =========================
+# =========================================================
 
-@bot.message_handler(commands=["start"])
+@bot.message_handler(
+    commands=["start"]
+)
 def start(message):
 
     chat_id = message.chat.id
 
     add_user(chat_id)
 
-    markup = InlineKeyboardMarkup(row_width=1)
-
-    markup.add(
-        InlineKeyboardButton(
-            "🎵 راهنما",
-            callback_data="help"
-        )
-    )
-
-    markup.add(
-        InlineKeyboardButton(
-            "📢 کانال ما",
-            url=f"https://t.me/{CHANNEL_USERNAME}"
-        )
-    )
-
     bot.send_message(
+
         chat_id,
 
         "سلام 👋🎵\n\n"
-        "به ربات دانلود موزیک خوش آمدید.\n\n"
-        "نام خواننده و آهنگ را بفرستید.\n\n"
+
+        "به ربات موزیک رادیو جوان خوش آمدید.\n\n"
+
+        "اسم خواننده و آهنگ را بفرستید.\n\n"
 
         "مثال:\n"
         "🎧 شادمهر - تقدیر\n"
         "🎧 محسن یگانه - بهت قول میدم\n"
         "🎧 معین - کعبه\n\n"
 
-        "ربات چند نتیجه را پیدا می‌کند و "
-        "می‌توانید آهنگ دقیق را انتخاب کنید.",
+        "بعد از جستجو، چند نتیجه نمایش داده می‌شود "
+        "و خودتان آهنگ دقیق را انتخاب می‌کنید.",
 
-        reply_markup=markup
+        reply_markup=main_keyboard()
     )
 
 
-# =========================
+# =========================================================
 # HELP
-# =========================
+# =========================================================
 
 @bot.callback_query_handler(
-    func=lambda call: call.data == "help"
+    func=lambda call:
+    call.data == "help"
 )
 def help_callback(call):
 
-    bot.answer_callback_query(call.id)
+    bot.answer_callback_query(
+        call.id
+    )
 
     bot.send_message(
+
         call.message.chat.id,
 
-        "🎵 <b>راهنمای استفاده</b>\n\n"
+        "🎵 <b>راهنمای ربات</b>\n\n"
 
-        "اسم خواننده + اسم آهنگ را بفرست.\n\n"
+        "نام خواننده و آهنگ را بفرستید.\n\n"
 
         "مثال:\n"
         "🎧 شادمهر - تقدیر\n"
+        "🎧 معین - کعبه\n"
         "🎧 رضا بهرام - دیوانه\n\n"
 
-        "بعد از جستجو چند نتیجه نمایش داده می‌شود "
-        "و خودت آهنگ درست را انتخاب می‌کنی.",
+        "ربات نتایج Radio Javan را پیدا می‌کند "
+        "و شما نتیجه دقیق را انتخاب می‌کنید.",
 
         parse_mode="HTML"
     )
 
 
-# =========================
-# ADMIN PANEL
-# =========================
+# =========================================================
+# ADMIN
+# =========================================================
 
-@bot.message_handler(commands=["admin"])
+@bot.message_handler(
+    commands=["admin"]
+)
 def admin_panel(message):
 
     if not ADMIN_ID:
@@ -366,22 +453,25 @@ def admin_panel(message):
         return
 
     bot.send_message(
+
         message.chat.id,
 
         "⚙️ <b>پنل مدیریت</b>\n\n"
-        "یک گزینه را انتخاب کنید:",
+        "یکی از گزینه‌ها را انتخاب کنید:",
 
         parse_mode="HTML",
+
         reply_markup=admin_keyboard()
     )
 
 
-# =========================
+# =========================================================
 # ADMIN CALLBACK
-# =========================
+# =========================================================
 
 @bot.callback_query_handler(
-    func=lambda call: call.data.startswith("admin_")
+    func=lambda call:
+    call.data.startswith("admin_")
 )
 def admin_callback(call):
 
@@ -391,9 +481,15 @@ def admin_callback(call):
     if str(call.message.chat.id) != str(ADMIN_ID):
         return
 
+    # -------------------------
+    # STATS
+    # -------------------------
+
     if call.data == "admin_stats":
 
-        bot.answer_callback_query(call.id)
+        bot.answer_callback_query(
+            call.id
+        )
 
         bot.edit_message_text(
 
@@ -402,9 +498,10 @@ def admin_callback(call):
             f"👤 تعداد کاربران: "
             f"<b>{len(users_list)}</b>\n\n"
 
-            "🟢 وضعیت: فعال",
+            "🟢 وضعیت ربات: فعال",
 
             call.message.chat.id,
+
             call.message.message_id,
 
             parse_mode="HTML",
@@ -412,9 +509,15 @@ def admin_callback(call):
             reply_markup=back_keyboard()
         )
 
+    # -------------------------
+    # BROADCAST
+    # -------------------------
+
     elif call.data == "admin_broadcast":
 
-        bot.answer_callback_query(call.id)
+        bot.answer_callback_query(
+            call.id
+        )
 
         broadcast_state[
             call.message.chat.id
@@ -424,29 +527,38 @@ def admin_callback(call):
 
             "📢 <b>پیام همگانی</b>\n\n"
 
-            "پیام موردنظر را ارسال کن.\n\n"
+            "پیامت را همینجا ارسال کن.\n\n"
 
-            "متن، عکس، ویدیو، صوت، فایل و "
-            "انواع پیام تلگرام قابل ارسال است.",
+            "متن، عکس، ویدیو، فایل، صوت و "
+            "پیام‌های تلگرام قابل ارسال است.",
 
             call.message.chat.id,
+
             call.message.message_id,
 
             parse_mode="HTML",
 
-            reply_markup=cancel_keyboard()
+            reply_markup=
+            cancel_broadcast_keyboard()
         )
+
+    # -------------------------
+    # BACK
+    # -------------------------
 
     elif call.data == "admin_back":
 
-        bot.answer_callback_query(call.id)
+        bot.answer_callback_query(
+            call.id
+        )
 
         bot.edit_message_text(
 
             "⚙️ <b>پنل مدیریت</b>\n\n"
-            "یک گزینه را انتخاب کنید:",
+            "یکی از گزینه‌ها را انتخاب کنید:",
 
             call.message.chat.id,
+
             call.message.message_id,
 
             parse_mode="HTML",
@@ -455,15 +567,15 @@ def admin_callback(call):
         )
 
 
-# =========================
+# =========================================================
 # CANCEL BROADCAST
-# =========================
+# =========================================================
 
 @bot.callback_query_handler(
     func=lambda call:
     call.data == "broadcast_cancel"
 )
-def cancel_broadcast(call):
+def broadcast_cancel(call):
 
     if not ADMIN_ID:
         return
@@ -483,9 +595,10 @@ def cancel_broadcast(call):
     bot.edit_message_text(
 
         "⚙️ <b>پنل مدیریت</b>\n\n"
-        "ارسال پیام لغو شد.",
+        "ارسال پیام همگانی لغو شد.",
 
         call.message.chat.id,
+
         call.message.message_id,
 
         parse_mode="HTML",
@@ -494,9 +607,9 @@ def cancel_broadcast(call):
     )
 
 
-# =========================
-# SONG CANCEL
-# =========================
+# =========================================================
+# CANCEL SEARCH
+# =========================================================
 
 @bot.callback_query_handler(
     func=lambda call:
@@ -509,18 +622,23 @@ def song_cancel(call):
         "لغو شد"
     )
 
+    search_results.pop(
+        call.from_user.id,
+        None
+    )
+
     try:
         bot.delete_message(
             call.message.chat.id,
             call.message.message_id
         )
-    except:
+    except Exception:
         pass
 
 
-# =========================
+# =========================================================
 # SONG SELECTION
-# =========================
+# =========================================================
 
 @bot.callback_query_handler(
     func=lambda call:
@@ -528,236 +646,314 @@ def song_cancel(call):
 )
 def song_selected(call):
 
-    parts = call.data.split(":")
+    try:
 
-    if len(parts) != 3:
-        return
+        parts = call.data.split(":")
 
-    owner_id = int(parts[1])
-    index = int(parts[2])
+        owner_id = int(
+            parts[1]
+        )
 
-    # فقط همان کاربری که سرچ کرده
-    if call.from_user.id != owner_id:
+        index = int(
+            parts[2]
+        )
+
+    except Exception:
+
         bot.answer_callback_query(
             call.id,
-            "❌ این لیست برای شما نیست.",
+            "❌ اطلاعات نامعتبر است.",
             show_alert=True
         )
+
         return
 
-    entries = search_results.get(
+    # فقط صاحب سرچ اجازه انتخاب دارد
+    if call.from_user.id != owner_id:
+
+        bot.answer_callback_query(
+
+            call.id,
+
+            "❌ این لیست برای کاربر دیگری است.",
+
+            show_alert=True
+        )
+
+        return
+
+    songs = search_results.get(
         owner_id,
         []
     )
 
-    if index >= len(entries):
+    if index >= len(songs):
+
         bot.answer_callback_query(
+
             call.id,
+
             "❌ نتیجه منقضی شده.",
+
             show_alert=True
         )
+
         return
 
-    selected = entries[index]
+    song = songs[index]
 
     bot.answer_callback_query(
         call.id,
-        "انتخاب شد 🎵"
+        "🎵 انتخاب شد"
     )
 
-    title = selected.get(
-        "title",
-        "آهنگ"
-    )
+    title = song_title(song)
+    artist = song_artist(song)
 
     bot.edit_message_text(
-        f"🎵 <b>{title}</b>\n\n"
-        "⏬ در حال دانلود...",
+
+        f"🎵 <b>{artist} - {title}</b>\n\n"
+        "⏬ در حال دریافت آهنگ از Radio Javan...",
+
         call.message.chat.id,
+
         call.message.message_id,
+
         parse_mode="HTML"
     )
 
-    download_song(
-        call.message.chat.id,
-        call.message.message_id,
-        selected
-    )
+    # دانلود در thread
+    threading.Thread(
+        target=download_song,
+        args=(
+            call.message.chat.id,
+            call.message.message_id,
+            song
+        ),
+        daemon=True
+    ).start()
 
 
-# =========================
-# DOWNLOAD
-# =========================
+# =========================================================
+# DOWNLOAD SONG
+# =========================================================
 
 def download_song(
     chat_id,
     status_message_id,
-    selected
+    song
 ):
 
-    os.makedirs(
-        "downloads",
-        exist_ok=True
-    )
-
-    video_url = selected.get(
-        "webpage_url"
-    ) or selected.get(
-        "url"
-    )
-
-    if not video_url:
-
-        bot.edit_message_text(
-            "❌ لینک آهنگ پیدا نشد.",
-            chat_id,
-            status_message_id
-        )
-
-        return
-
-    ydl_opts = {
-
-        "format": "bestaudio/best",
-
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192"
-            }
-        ],
-
-        "outtmpl":
-        "downloads/%(id)s.%(ext)s",
-
-        "quiet": True,
-
-        "noplaylist": True,
-
-        "nocheckcertificate": True,
-
-        "ffmpeg_location":
-        "/usr/bin",
-
-        "retries": 3
-    }
+    temp_path = None
 
     try:
 
-        with YoutubeDL(
-            ydl_opts
-        ) as ydl:
+        # -------------------------------------------------
+        # گرفتن ID
+        # -------------------------------------------------
 
-            info = ydl.extract_info(
-                video_url,
-                download=True
+        sid = song_id(song)
+
+        if not sid:
+
+            raise Exception(
+                "Song ID not found"
             )
 
-        if (
-            "entries" in info
-            and info["entries"]
-        ):
-            info = info["entries"][0]
+        # -------------------------------------------------
+        # دریافت اطلاعات کامل آهنگ
+        # -------------------------------------------------
 
-        file_id = info.get(
-            "id",
-            selected.get("id", "audio")
+        full_song = rj.get_song_by_id(
+            sid
         )
 
-        file_path = (
-            f"downloads/{file_id}.mp3"
+        # -------------------------------------------------
+        # HQ LINK
+        # -------------------------------------------------
+
+        hq_link = get_value(
+            full_song,
+            "hq_link",
+            ""
         )
 
-        title = info.get(
-            "title",
-            selected.get(
-                "title",
-                "Music"
-            )
-        )
+        if not hq_link:
 
-        uploader = info.get(
-            "uploader",
-            selected.get(
-                "uploader",
-                "Unknown Artist"
-            )
-        )
-
-        if not os.path.exists(
-            file_path
-        ):
-
-            bot.edit_message_text(
-                "❌ فایل آهنگ ساخته نشد.",
-                chat_id,
-                status_message_id
+            # بعضی نسخه‌ها ممکن است link داشته باشند
+            hq_link = get_value(
+                full_song,
+                "link",
+                ""
             )
 
-            return
+        if not hq_link:
+
+            raise Exception(
+                "Radio Javan did not return an audio link"
+            )
+
+        title = song_title(
+            full_song
+        )
+
+        artist = song_artist(
+            full_song
+        )
+
+        # -------------------------------------------------
+        # Download
+        # -------------------------------------------------
 
         bot.edit_message_text(
-            "⬆️ در حال ارسال آهنگ...",
+
+            f"🎵 <b>{artist} - {title}</b>\n\n"
+            "⬇️ در حال دانلود...",
+
             chat_id,
+
+            status_message_id,
+
+            parse_mode="HTML"
+        )
+
+        # فایل موقت m4a
+        temp_file = tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=".m4a"
+        )
+
+        temp_path = temp_file.name
+
+        temp_file.close()
+
+        request = urllib.request.Request(
+
+            hq_link,
+
+            headers={
+                "User-Agent":
+                "Mozilla/5.0"
+            }
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=60
+        ) as response:
+
+            with open(
+                temp_path,
+                "wb"
+            ) as output:
+
+                while True:
+
+                    chunk = response.read(
+                        1024 * 1024
+                    )
+
+                    if not chunk:
+                        break
+
+                    output.write(
+                        chunk
+                    )
+
+        # -------------------------------------------------
+        # Send directly as audio
+        # -------------------------------------------------
+
+        bot.edit_message_text(
+
+            "⬆️ در حال ارسال آهنگ...",
+
+            chat_id,
+
             status_message_id
         )
 
         caption = (
+
             f"🎵 <b>{title}</b>\n\n"
-            f"👤 {uploader}\n\n"
+
+            f"👤 {artist}\n\n"
+
             f"🆔 @{CHANNEL_USERNAME}"
         )
 
         with open(
-            file_path,
+            temp_path,
             "rb"
         ) as audio:
 
             bot.send_audio(
+
                 chat_id=chat_id,
+
                 audio=audio,
+
                 title=title,
-                performer=uploader,
+
+                performer=artist,
+
                 caption=caption,
+
                 parse_mode="HTML"
             )
 
+        # پاک کردن پیام وضعیت
         try:
-            os.remove(file_path)
-        except:
-            pass
 
-        try:
             bot.delete_message(
                 chat_id,
                 status_message_id
             )
-        except:
+
+        except Exception:
             pass
 
     except Exception as e:
 
         error = str(e)
 
-        bot.edit_message_text(
+        try:
 
-            "❌ <b>خطا در دریافت آهنگ</b>\n\n"
-            f"<code>{error[:300]}</code>",
+            bot.edit_message_text(
 
-            chat_id,
-            status_message_id,
+                "❌ <b>خطا در دریافت آهنگ</b>\n\n"
 
-            parse_mode="HTML"
-        )
+                f"<code>{error[:500]}</code>",
+
+                chat_id,
+
+                status_message_id,
+
+                parse_mode="HTML"
+            )
+
+        except Exception:
+            pass
+
+    finally:
+
+        if temp_path:
+
+            try:
+                os.remove(
+                    temp_path
+                )
+            except Exception:
+                pass
 
 
-# =========================
+# =========================================================
 # ALL MESSAGES
-# =========================
+# =========================================================
 
 @bot.message_handler(
     func=lambda message: True,
+
     content_types=[
         "text",
         "photo",
@@ -772,9 +968,9 @@ def handle_messages(message):
 
     chat_id = message.chat.id
 
-    # =========================
+    # =====================================================
     # BROADCAST
-    # =========================
+    # =====================================================
 
     if (
         ADMIN_ID
@@ -782,11 +978,13 @@ def handle_messages(message):
         and broadcast_state.get(chat_id)
     ):
 
-        broadcast_state[chat_id] = False
+        broadcast_state[
+            chat_id
+        ] = False
 
         status = bot.send_message(
             chat_id,
-            "⏳ در حال ارسال پیام..."
+            "⏳ در حال ارسال پیام همگانی..."
         )
 
         success = 0
@@ -799,14 +997,18 @@ def handle_messages(message):
             try:
 
                 bot.copy_message(
+
                     chat_id=user_id,
+
                     from_chat_id=chat_id,
-                    message_id=message.message_id
+
+                    message_id=
+                    message.message_id
                 )
 
                 success += 1
 
-            except:
+            except Exception:
 
                 failed += 1
 
@@ -815,9 +1017,11 @@ def handle_messages(message):
             "✅ <b>ارسال پایان یافت</b>\n\n"
 
             f"🟢 موفق: <b>{success}</b>\n"
+
             f"🔴 ناموفق: <b>{failed}</b>",
 
             chat_id,
+
             status.message_id,
 
             parse_mode="HTML",
@@ -827,13 +1031,16 @@ def handle_messages(message):
 
         return
 
-    # =========================
-    # ADD USER
-    # =========================
+    # =====================================================
+    # REGISTER USER
+    # =====================================================
 
     add_user(chat_id)
 
-    # فقط متن
+    # =====================================================
+    # ONLY TEXT
+    # =====================================================
+
     if message.content_type != "text":
         return
 
@@ -846,143 +1053,193 @@ def handle_messages(message):
         return
 
     status = bot.send_message(
+
         chat_id,
-        "🔍 در حال جستجو در Audiomack..."
+
+        "🔍 در حال جستجو در Radio Javan..."
     )
 
-    # =========================
-    # LINK
-    # =========================
+    # =====================================================
+    # DIRECT RADIO JAVAN LINK
+    # =====================================================
 
-    if query.startswith(
-        ("http://", "https://")
+    if (
+        "radiojavan.com" in query
+        or "play.radiojavan.com" in query
     ):
 
-        selected = {
-            "webpage_url": query,
-            "title": "Music",
-            "uploader": ""
-        }
+        try:
 
-        download_song(
-            chat_id,
-            status.message_id,
-            selected
-        )
+            song = rj.get_song_by_url(
+                query
+            )
+
+            search_results[
+                chat_id
+            ] = [song]
+
+            markup = results_keyboard(
+                chat_id,
+                [song]
+            )
+
+            bot.edit_message_text(
+
+                "🎵 <b>آهنگ پیدا شد</b>\n\n"
+                "برای دریافت، دکمه زیر را بزن:",
+
+                chat_id,
+
+                status.message_id,
+
+                parse_mode="HTML",
+
+                reply_markup=markup
+            )
+
+        except Exception as e:
+
+            bot.edit_message_text(
+
+                "❌ لینک Radio Javan معتبر نیست.\n\n"
+                f"<code>{str(e)[:300]}</code>",
+
+                chat_id,
+
+                status.message_id,
+
+                parse_mode="HTML"
+            )
 
         return
 
-    # =========================
-    # SEARCH AUDIOMACK
-    # =========================
+    # =====================================================
+    # RADIO JAVAN SEARCH
+    # =====================================================
 
     try:
 
-        search_opts = {
-
-            "quiet": True,
-
-            "skip_download": True,
-
-            "extract_flat": True,
-
-            "noplaylist": True
-        }
-
-        search_query = (
-            f"amsearch10:{query}"
+        result = rj.search(
+            query
         )
 
-        with YoutubeDL(
-            search_opts
-        ) as ydl:
-
-            result = ydl.extract_info(
-                search_query,
-                download=False
-            )
-
-        entries = result.get(
-            "entries",
+        # songs_id طبق مستندات radiojavanapi
+        song_ids = get_value(
+            result,
+            "songs_id",
             []
         )
 
-        entries = [
-            e for e in entries
-            if e
-        ]
-
-        if not entries:
+        if not song_ids:
 
             bot.edit_message_text(
-                "❌ آهنگ پیدا نشد.\n\n"
-                "اسم خواننده و آهنگ را دقیق‌تر بنویس.",
+
+                "❌ آهنگی پیدا نشد.\n\n"
+                "مثلاً این‌طور جستجو کن:\n"
+                "شادمهر - تقدیر",
+
                 chat_id,
+
                 status.message_id
             )
 
             return
 
-        # مرتب‌سازی
-        entries.sort(
-            key=lambda e:
-            score_result(query, e),
+        songs = []
+
+        # حداکثر 10 نتیجه
+        for sid in song_ids[:10]:
+
+            try:
+
+                song = rj.get_song_by_id(
+                    sid
+                )
+
+                songs.append(
+                    song
+                )
+
+            except Exception:
+                continue
+
+        if not songs:
+
+            bot.edit_message_text(
+
+                "❌ اطلاعات آهنگ‌ها دریافت نشد.",
+
+                chat_id,
+
+                status.message_id
+            )
+
+            return
+
+        # مرتب‌سازی بر اساس تطابق
+        songs.sort(
+
+            key=lambda song:
+            score_song(
+                query,
+                song
+            ),
+
             reverse=True
         )
 
-        # ذخیره نتایج برای کاربر
+        songs = songs[:8]
+
+        # ذخیره نتایج
         search_results[
             chat_id
-        ] = entries[:8]
+        ] = songs
+
+        # ساخت متن
+        text = (
+            "🎵 <b>نتایج Radio Javan</b>\n\n"
+            "آهنگ موردنظرت را انتخاب کن:"
+        )
 
         bot.edit_message_text(
 
-            "🎵 <b>نتایج جستجو</b>\n\n"
-            "آهنگ موردنظر را انتخاب کن:",
+            text,
 
             chat_id,
+
             status.message_id,
 
             parse_mode="HTML",
 
-            reply_markup=results_keyboard(
+            reply_markup=
+            results_keyboard(
                 chat_id,
-                entries
+                songs
             )
         )
 
     except Exception as e:
 
-        error = str(e)
-
         bot.edit_message_text(
 
-            "❌ <b>خطا در جستجو</b>\n\n"
-            f"<code>{error[:300]}</code>",
+            "❌ <b>خطا در جستجوی Radio Javan</b>\n\n"
+
+            f"<code>{str(e)[:500]}</code>",
 
             chat_id,
+
             status.message_id,
 
             parse_mode="HTML"
         )
 
 
-# =========================
-# DOWNLOAD FOLDER
-# =========================
-
-os.makedirs(
-    "downloads",
-    exist_ok=True
-)
-
-
-# =========================
-# START
-# =========================
+# =========================================================
+# START BOT
+# =========================================================
 
 print(
-    "🎵 Music Bot Started..."
+    "🎵 Radio Javan Music Bot Started..."
 )
 
 bot.infinity_polling(
